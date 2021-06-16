@@ -37,6 +37,11 @@
  */
 
 #include <sys/types.h>
+#include <stdio.h>
+#include <errno.h>
+
+typedef unsigned char uchar_t;
+#define NBBY 8
 
 #define	MATCH_BITS	6
 #define	MATCH_MIN	3
@@ -104,7 +109,7 @@ lzjb_decompress(void *s_start, void *d_start, size_t s_len, size_t d_len, int n)
 	uchar_t *src = s_start;
 	uchar_t *dst = d_start;
 	uchar_t *d_end = (uchar_t *)d_start + d_len;
-	uchar_t *cpy, copymap;
+	uchar_t *cpy, copymap = 0;
 	int copymask = 1 << (NBBY - 1);
 
 	while (dst < d_end) {
@@ -115,6 +120,8 @@ lzjb_decompress(void *s_start, void *d_start, size_t s_len, size_t d_len, int n)
 		if (copymap & copymask) {
 			int mlen = (src[0] >> (NBBY - MATCH_BITS)) + MATCH_MIN;
 			int offset = ((src[0] << NBBY) | src[1]) & OFFSET_MASK;
+			printf("mlen := %02i, offset := %04i\n", mlen, offset);
+
 			if (offset==0) { offset=OFFSET_MASK+1; } /* CSA TWEAK */
 			src += 2;
 			if ((cpy = dst - offset) < (uchar_t *)d_start)
@@ -126,4 +133,79 @@ lzjb_decompress(void *s_start, void *d_start, size_t s_len, size_t d_len, int n)
 		}
 	}
 	return (0);
+}
+
+typedef int (*fops_read_t) (uchar_t *dst, void *fops_ctx, const size_t len, const size_t offset);
+typedef int (*fops_write_t) (void *fops_ctx, const uchar_t *src, const size_t len, const size_t offset);
+
+typedef struct __lz_struct_ctx_t
+{
+	fops_read_t		sread;
+	fops_read_t		dread;
+	fops_write_t	dwrite;
+	void			*sctx;
+	void			*dctx;
+
+	size_t			scnt;
+	size_t			dcnt;
+	size_t			dlen;
+
+	uchar_t			copymap;
+	uchar_t			copymask;
+} lz_ctx_t;
+
+int lzjb_decompress_ext(lz_ctx_t *ctx, size_t len)
+{
+	int rc = 0;
+
+	if (ctx->dcnt < ctx->dlen) {
+		uchar_t src_byte[2u], dst_byte;
+		size_t scnt = ctx->scnt; size_t dcnt = ctx->dcnt;
+		size_t cnt = 0;
+		
+		int copymask = ctx->copymask;
+		uchar_t copymap = ctx->copymap;
+
+		while ((dcnt < ctx->dlen) && (cnt < len)) {
+			if ((copymask <<= 1) == (1 << NBBY)) {
+				copymask = 1;
+				ctx->sread(&src_byte[0], ctx->sctx, 1U, scnt++);
+				copymap = src_byte[0];
+			}
+			if (copymap & copymask) {
+				ctx->sread(&src_byte[0], ctx->sctx, 2U, scnt); scnt += 2;
+				int mlen = (src_byte[0] >> (NBBY - MATCH_BITS)) + MATCH_MIN;
+				int offset = ((src_byte[0] << NBBY) | src_byte[1]) & OFFSET_MASK;
+
+				if (offset==0) { offset=OFFSET_MASK+1; } /* CSA TWEAK */
+
+				if ((dcnt - offset) > 0) {
+					while (--mlen >= 0 && ctx->dcnt < ctx->dlen) {
+						ctx->dread(&dst_byte, ctx->dctx, 1U, offset++);
+						ctx->dwrite(ctx->dctx, &dst_byte, 1U, ctx->dcnt++); cnt++;
+					}
+				}
+				else {
+					rc = -EINVAL;
+					break;
+				}
+			} else {
+				ctx->sread(&src_byte[0], ctx->sctx, 1U, scnt++);
+				ctx->dwrite(ctx->dctx, &src_byte[0], 1U, dcnt++); cnt++;
+			}
+		}
+
+		ctx->scnt = scnt;
+		ctx->dcnt = dcnt;
+		ctx->copymap = copymap;
+		ctx->copymask = copymask;
+
+		if (!rc) rc = dcnt;
+	}
+
+	else {
+		rc = -EOF;
+	}
+
+	return (rc);
 }

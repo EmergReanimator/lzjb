@@ -1,14 +1,54 @@
 /* simple driver for C code */
 #include <inttypes.h>
-typedef unsigned char uchar_t;
-#define NBBY 8
 #include "lzjb.c"
 
 #include <string.h>
+#include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <fcntl.h>
+
+static char buffer[32768];
+
+int sread (uchar_t *dst, void *fops_ctx, const size_t len, const size_t offset)
+{
+    int rc = len;
+
+    uchar_t *src = fops_ctx;
+
+    for (size_t i = offset; i < (offset+len); i++) {
+        *dst++ =  src[i];
+    }
+
+    return rc;
+}
+
+int dread (uchar_t *dst, void *fops_ctx, const size_t len, const size_t offset)
+{
+    int rc = len;
+
+    uchar_t *src = fops_ctx;
+
+    for (size_t i = offset; i < (offset+len); i++) {
+        *dst++ =  src[i];
+    }
+
+    return rc;
+}
+
+int dwrite (void *fops_ctx, const uchar_t *src, const size_t len, const size_t offset)
+{
+    int rc = len;
+
+    uchar_t *dst = fops_ctx;
+
+    for (size_t i = offset; i < (offset+len); i++) {
+        dst[i] =  *src++;
+    }
+
+    return rc;
+}
 
 uchar_t* writesize(off_t size, int first, uchar_t *dst) {
     uchar_t lsb = size & 0x7F;
@@ -122,8 +162,41 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Can't mmap %s\n", outfile);
             return 1;
         }
+
+        size_t s_len = ((size_t)inbuf) + insize - ((size_t)src);
+        printf("[DEBUG] s_len := %zu\n", s_len);
+        printf("[DEBUG] outsize := %zu\n", outsize);
+
         // now decompress!
-        lzjb_decompress(src, outbuf, (uchar_t*)inbuf+insize-src, outsize, 0);
+        if (1) {
+            lz_ctx_t lz_ctx;
+            size_t cnt = 0;
+            
+            memset(&buffer[0], 0, sizeof(buffer)/sizeof(buffer[0]));
+
+            lz_ctx.sread = sread;
+            lz_ctx.dread = dread;
+            lz_ctx.dwrite = dwrite;
+            lz_ctx.sctx = src;
+            lz_ctx.dctx = &buffer[0];
+            lz_ctx.scnt = 0;
+            lz_ctx.dcnt = 0;
+            lz_ctx.dlen = outsize;
+            lz_ctx.copymap = 0;
+            lz_ctx.copymask = 1 << (NBBY - 1);
+
+            cnt = lzjb_decompress_ext(&lz_ctx, 128U);
+            if (cnt > 0) printf("[DEBUG] %s\n", &buffer[cnt-128U]);
+
+            cnt = lzjb_decompress_ext(&lz_ctx, 128U);
+            if (cnt > 0) printf("[DEBUG] %s\n", &buffer[cnt-128U]);
+
+            cnt = lzjb_decompress_ext(&lz_ctx, 128U);
+            if (cnt > 0) printf("[DEBUG] %s\n", &buffer[cnt-128U]);
+        }
+
+        lzjb_decompress(src, outbuf, s_len, outsize, 0);
+
         // unmap, close
         munmap(outbuf, outsize);
         close(out_fd);
