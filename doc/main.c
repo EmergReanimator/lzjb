@@ -170,8 +170,8 @@ int main(int argc, char **argv) {
         // now decompress!
         if (1) {
             lz_ctx_t lz_ctx;
-            size_t cnt = 0;
-            
+            int cnt = 0;
+
             memset(&buffer[0], 0, sizeof(buffer)/sizeof(buffer[0]));
 
             lz_ctx.sread = sread;
@@ -185,14 +185,25 @@ int main(int argc, char **argv) {
             lz_ctx.copymap = 0;
             lz_ctx.copymask = 1 << (NBBY - 1);
 
-            cnt = lzjb_decompress_ext(&lz_ctx, 128U);
-            if (cnt > 0) printf("[DEBUG] %s\n", &buffer[cnt-128U]);
+            int d_len = outsize;
+            do {
+                cnt = lzjb_decompress_ext(&lz_ctx, 128U);
+                if (cnt > 0)    d_len -= cnt;
+                else            break;
+            } while (d_len > 0);
 
-            cnt = lzjb_decompress_ext(&lz_ctx, 128U);
-            if (cnt > 0) printf("[DEBUG] %s\n", &buffer[cnt-128U]);
-
-            cnt = lzjb_decompress_ext(&lz_ctx, 128U);
-            if (cnt > 0) printf("[DEBUG] %s\n", &buffer[cnt-128U]);
+            if (!d_len) {
+                printf("\n"
+                        "==== Beginning of content ===="
+                        "\n"
+                        "%s"
+                        "======= End of content ======="
+                        "\n",
+                        &buffer[0U]);
+            }
+            else {
+                printf("=== Inflating failed with %i ===\n", d_len);
+            }
         }
 
         lzjb_decompress(src, outbuf, s_len, outsize, 0);
